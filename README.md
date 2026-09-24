@@ -1,5 +1,7 @@
 # Content Moderation Triage
 
+[![CI](https://github.com/H-yz2022/moderation-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/H-yz2022/moderation-triage/actions/workflows/ci.yml)
+
 Specialist AI agents review each comment. They vote on whether it breaks a written policy, and every violation vote has to **cite the policy clause** it relies on. Clear cases are decided automatically. **Uncertain or high-severity cases go to a human review queue.** An eval harness measures **precision, recall, escalation rate and cost per 1,000 items** for each routing strategy on public toxicity data.
 
 ```
@@ -9,6 +11,10 @@ comment ─► $0 gate (TF-IDF) ─► text agent ─► context agent ─► we
           allow                                          arbiter (Sonnet) ─► unsure? ─► human queue
                          metadata agent (rules, $0): spam + risk prior
 ```
+
+![Triage page: specialist votes, cited policy clause, and per-call cost](docs/screenshot.png)
+
+*Triage page: each specialist's vote, the cited policy clause, and what the decision cost. Screenshot is in offline mock mode.*
 
 ## Why it's built this way
 
@@ -30,7 +36,7 @@ pip install -r requirements-dev.txt; pip install --no-deps -e .
 copy .env.example .env          # add ANTHROPIC_API_KEY, or leave empty for mock mode
 pytest -q                       # offline, no key needed
 
-# 1) data: Civil Comments v1.2 (~430 MB zip, includes parent_text for the context agent)
+# 1) data: Civil Comments (~400 MB from Hugging Face; ~2M labelled comments)
 python -m modtriage.cli download
 python -m modtriage.cli prepare --eval-n 600 --pos-frac 0.3
 python -m modtriage.cli train-gate          # prints a suggested MODTRIAGE_GATE_ALLOW_BELOW
@@ -44,7 +50,7 @@ python -m modtriage.cli serve               # API on :8000
 cd frontend; npm install; npm run dev       # UI on :5173 (proxies /api)
 ```
 
-If the zip URL is unavailable, use `download --source hf` (Hugging Face `google/civil_comments`, text and labels only, no parent comments). You can also download Kaggle's *Jigsaw Unintended Bias* `all_data.csv` yourself and run `prepare --csv path\to\all_data.csv`. That file also has reaction counts for the metadata agent. Its `rating` column is dropped on purpose because it leaks the moderation outcome.
+`download` first tries the original Civil Comments v1.2 zip, which includes the parent comment for the context agent. That Google-hosted copy now returns HTTP 403, so it falls back automatically to Hugging Face `google/civil_comments` (text and labels only, no parent comments). To get parent comments and reaction counts, download Kaggle's *Jigsaw Unintended Bias* `all_data.csv` yourself and run `prepare --csv path\to\all_data.csv`. That file's `rating` column is dropped on purpose because it leaks the moderation outcome.
 
 Docker: `docker build -t modtriage . && docker run -p 8000:8000 --env-file .env modtriage`. One-click Render deploy is in `render.yaml`.
 
