@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+data/raw/
+data/processed/
+data/models/
+data/*.db
+reports/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+.DS_Store

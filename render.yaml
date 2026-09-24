@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: moderation-triage
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MODTRIAGE_MODE
+        value: cascade
+      - key: MODTRIAGE_MAX_DAILY_LLM_CALLS
+        value: "300"
+      - key: MODTRIAGE_RUN_BUDGET_USD
+        value: "1.0"

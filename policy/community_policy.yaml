@@ -1,0 +1,129 @@
+# Community content policy used by every agent.
+# Agents MUST cite clause ids from this file; votes citing unknown ids are
+# discarded by the validator (see src/modtriage/policy.py).
+version: "2026.09-v1"
+name: "Community Comment Policy"
+
+categories:
+  harassment:
+    label: Harassment & insults
+    severity: medium
+    dataset_labels: [insult]
+  hate:
+    label: Hate / identity attacks
+    severity: high
+    dataset_labels: [identity_attack]
+  violence:
+    label: Threats & violence
+    severity: high
+    dataset_labels: [threat]
+  sexual:
+    label: Sexual content
+    severity: medium
+    dataset_labels: [sexual_explicit]
+  profanity:
+    label: Obscenity & severe profanity
+    severity: low
+    dataset_labels: [obscene]
+  spam:
+    label: Spam & manipulation
+    severity: low
+    dataset_labels: []
+
+clauses:
+  - id: HAR-1
+    category: harassment
+    title: Direct insults
+    text: >-
+      Content that insults, demeans or name-calls a specific person or other
+      participants in the conversation (e.g. calling someone an idiot, moron,
+      pathetic, worthless) violates this policy.
+  - id: HAR-2
+    category: harassment
+    title: Degrading attacks on a group of users
+    text: >-
+      Content that mocks or degrades a group of participants or a named
+      non-protected group with the aim of humiliating them (e.g. "everyone who
+      voted for X is a brain-dead fool").
+  - id: HAR-3
+    category: harassment
+    title: Targeted pile-on in context
+    text: >-
+      A reply that joins or escalates an attack on the author of the parent
+      comment, even if the words are mild in isolation.
+  - id: HATE-1
+    category: hate
+    title: Attacks on protected characteristics
+    text: >-
+      Content that attacks, dehumanises, or asserts inferiority of people based
+      on race, ethnicity, national origin, religion, sex, gender identity,
+      sexual orientation, disability or serious disease, including slurs.
+  - id: HATE-2
+    category: hate
+    title: Hateful generalisations and exclusion
+    text: >-
+      Negative generalisations about a protected group ("all X are criminals")
+      or calls to exclude or segregate a protected group.
+  - id: VIO-1
+    category: violence
+    title: Threats of violence
+    text: >-
+      Statements of intent or desire to cause physical harm to a person or
+      group, including conditional or veiled threats ("keep talking and see
+      what happens to you").
+  - id: VIO-2
+    category: violence
+    title: Incitement or glorification of violence
+    text: >-
+      Encouraging others to harm a person or group, or celebrating serious
+      violence against them.
+  - id: SEX-1
+    category: sexual
+    title: Sexually explicit content
+    text: >-
+      Graphic descriptions of sexual acts or explicit sexual content.
+  - id: SEX-2
+    category: sexual
+    title: Sexual harassment
+    text: >-
+      Unwanted sexual comments or sexualising remarks aimed at a person.
+  - id: PROF-1
+    category: profanity
+    title: Severe obscenity
+    text: >-
+      Repeated or severe obscene language, especially when directed at a
+      person. Mild, non-directed profanity alone is NOT a violation (see EX-4).
+  - id: SPAM-1
+    category: spam
+    title: Spam and scams
+    text: >-
+      Unsolicited commercial promotion, repetitive link dropping, scams, or
+      coordinated/inauthentic posting patterns.
+
+exceptions:
+  - id: EX-1
+    title: Quoting to condemn or report
+    text: >-
+      Quoting or describing abusive content in order to condemn it, report it,
+      or discuss it is allowed.
+  - id: EX-2
+    title: Counter-speech
+    text: >-
+      Pushing back against hateful or abusive content is allowed, provided the
+      reply does not itself insult or threaten.
+  - id: EX-3
+    title: Criticism of ideas, institutions and public conduct
+    text: >-
+      Harsh criticism of ideas, policies, institutions, or the public actions
+      of officials is allowed when it does not attack protected
+      characteristics or threaten violence.
+  - id: EX-4
+    title: Non-directed mild profanity
+    text: >-
+      Mild profanity used for emphasis and not aimed at a person is allowed.
+
+actions:
+  remove: Content violates at least one clause with sufficient agreement.
+  allow: Content does not violate any clause (or an exception applies).
+  escalate: Agents disagree, confidence is low, or a high-severity clause is
+    plausibly implicated. A human reviewer decides.
