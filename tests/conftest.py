@@ -16,6 +16,7 @@ def make_settings(**kw):
         db_path=tmp / "t.db",
         gate_path=tmp / "missing_gate.joblib",
         reports_dir=tmp / "reports",
+        weights_path=tmp / "agent_weights.json",
         provider="mock",
         mode="cascade",
         run_budget_usd=5.0,

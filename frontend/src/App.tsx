@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import Batch from "./pages/Batch";
 import Eval from "./pages/Eval";
 import PolicyPage from "./pages/PolicyPage";
 import Queue from "./pages/Queue";
@@ -8,6 +9,7 @@ import type { Health, Policy } from "./types";
 
 const TABS = [
   { id: "triage", label: "Triage" },
+  { id: "batch", label: "Batch" },
   { id: "queue", label: "Review queue" },
   { id: "eval", label: "Evaluation" },
   { id: "policy", label: "Policy" },
@@ -57,6 +59,7 @@ export default function App() {
       </header>
       {err && <div className="error" style={{ marginBottom: 16 }}>API unreachable: {err}</div>}
       {tab === "triage" && <Triage health={health} policy={policy} />}
+      {tab === "batch" && <Batch health={health} policy={policy} />}
       {tab === "queue" && <Queue policy={policy} />}
       {tab === "eval" && <Eval />}
       {tab === "policy" && <PolicyPage policy={policy} />}

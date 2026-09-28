@@ -26,6 +26,7 @@ class Policy:
     categories: dict[str, dict]
     clauses: dict[str, Clause]
     exceptions: dict[str, dict]
+    examples: tuple[dict, ...] = ()
 
     # -- lookups ------------------------------------------------------------
     def category_of(self, clause_id: str) -> str | None:
@@ -57,6 +58,14 @@ class Policy:
         lines += ["", "## Exceptions (content matching these is allowed)"]
         for eid, e in self.exceptions.items():
             lines.append(f"- [{eid}] {e['title']}: {e['text']}")
+        if self.examples:
+            lines += ["", "## Worked examples (how the clauses and exceptions apply)"]
+            for i, ex in enumerate(self.examples, 1):
+                cites = ", ".join(ex["clause_ids"] + ex["exception_ids"]) or "none"
+                lines.append(f"{i}. Comment: {ex['text']!r}")
+                if ex.get("parent"):
+                    lines.append(f"   In reply to: {ex['parent']!r}")
+                lines.append(f"   Verdict: {ex['label']} (cites: {cites}). Why: {ex['why']}")
         return "\n".join(lines)
 
     # -- validation ---------------------------------------------------------
@@ -104,4 +113,28 @@ def _load(path: str) -> Policy:
         if c.category not in cats:
             raise ValueError(f"clause {c.id} has unknown category {c.category}")
     exceptions = {e["id"]: {"title": e["title"], "text": e["text"]} for e in raw.get("exceptions", [])}
-    return Policy(raw["version"], raw["name"], cats, clauses, exceptions)
+    examples = tuple(_example(e, clauses, exceptions) for e in raw.get("examples") or [])
+    return Policy(raw["version"], raw["name"], cats, clauses, exceptions, examples)
+
+
+def _example(e: dict, clauses: dict[str, Clause], exceptions: dict[str, dict]) -> dict:
+    """Worked examples are part of the prompt, so they get the same grounding
+    rules as a vote: violations cite a known clause, ids must exist."""
+    ex = {
+        "text": str(e["text"]),
+        "parent": e.get("parent"),
+        "label": e["label"],
+        "clause_ids": list(e.get("clause_ids") or []),
+        "exception_ids": list(e.get("exception_ids") or []),
+        "why": str(e.get("why", "")).strip(),
+    }
+    if ex["label"] not in ("violation", "no_violation"):
+        raise ValueError(f"example {ex['text']!r}: label must be violation or no_violation")
+    unknown = [c for c in ex["clause_ids"] if c not in clauses] + [
+        x for x in ex["exception_ids"] if x not in exceptions
+    ]
+    if unknown:
+        raise ValueError(f"example {ex['text']!r} cites unknown ids {unknown}")
+    if ex["label"] == "violation" and not ex["clause_ids"]:
+        raise ValueError(f"example {ex['text']!r}: a violation example must cite a clause")
+    return ex

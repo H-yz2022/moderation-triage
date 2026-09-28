@@ -38,6 +38,27 @@ export default function PolicyPage({ policy }: { policy: Policy | null }) {
           </div>
         ))}
       </div>
+      {policy.examples?.length > 0 && (
+        <div className="card">
+          <h2>Worked examples</h2>
+          <p className="small muted">
+            These go into the policy prompt every agent sees, to show where the boundaries sit. They're synthetic on purpose. Copying eval rows here would
+            leak the test set.
+          </p>
+          {policy.examples.map((ex, i) => (
+            <div key={i} style={{ marginTop: 12 }}>
+              {ex.parent && <div className="quote small muted">In reply to: {ex.parent}</div>}
+              <div className="quote">{ex.text}</div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <span className={`pill ${ex.label}`}>{ex.label === "violation" ? "violation" : "no violation"}</span>
+                {ex.clause_ids.map((c) => <span key={c} className="pill clause">{c}</span>)}
+                {ex.exception_ids.map((c) => <span key={c} className="pill allow">{c}</span>)}
+                <span className="small">{ex.why}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

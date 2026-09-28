@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .agents import Arbiter, ContextAgent, MetadataAgent, TextAgent
 from .config import Settings, get_settings
+from .feedback import load_weights
 from .gate import Gate
 from .llm import AnthropicClient, BudgetLedger, CachedClient, LLMClient
 from .mock import MockClient
@@ -49,7 +50,7 @@ class Triage:
         self.client = client
         self.gate: Gate | None = Gate.load(s.gate_path) if gate is True else (gate or None)
         self.ledger = ledger or BudgetLedger(s.run_budget_usd)
-        self.weights = weights
+        self.weights = weights if weights is not None else load_weights(s.weights_path)
         p, c, m = self.policy, client, self.ledger
         self.text_agent = TextAgent(p, c, s.specialist_model, m)
         self.context_agent = ContextAgent(p, c, s.specialist_model, m)

@@ -42,6 +42,7 @@ export interface DecisionOut {
   gate_score: number | null;
   cost_usd: number;
   list_cost_usd: number;
+  llm_calls: number;
   provider: string;
   llm_allowed: boolean;
 }
@@ -81,6 +82,46 @@ export interface Policy {
   categories: Record<string, { label: string; severity: string; dataset_labels: string[] }>;
   clauses: Clause[];
   exceptions: { id: string; title: string; text: string }[];
+  examples: PolicyExample[];
+}
+
+export interface PolicyExample {
+  text: string;
+  parent: string | null;
+  label: "violation" | "no_violation";
+  clause_ids: string[];
+  exception_ids: string[];
+  why: string;
+}
+
+export interface BatchItem {
+  text: string;
+  parent_text?: string | null;
+  id?: string;
+}
+
+export interface BatchOut {
+  results: DecisionOut[];
+  summary: { n: number; actions: Record<Action, number>; cost_usd: number; llm_calls: number };
+}
+
+export interface AgentAgreement {
+  n: number;
+  abstain: number;
+  accuracy: number | null;
+  precision: number | null;
+  recall: number | null;
+}
+
+export interface Agreement {
+  n_reviewed: number;
+  reviewer_actions: Record<string, number>;
+  lean_agreement: { n: number; rate: number | null };
+  by_route: Record<string, { n: number; agree: number; rate: number | null }>;
+  agents: Record<string, AgentAgreement>;
+  clause_agreement: { n: number; mean_jaccard: number | null };
+  calibration: Record<string, { weight: number; default: number; n: number; accuracy: number | null; calibrated: boolean }>;
+  active_weights: Record<string, number> | null;
 }
 
 export interface Health {
@@ -91,6 +132,7 @@ export interface Health {
   specialist_model: string;
   arbiter_model: string;
   modes: string[];
+  agent_weights: Record<string, number> | null;
 }
 
 export interface Metrics {

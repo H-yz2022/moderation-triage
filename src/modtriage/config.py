@@ -72,6 +72,12 @@ class Settings:
     gate_path: Path = field(
         default_factory=lambda: Path(os.environ.get("MODTRIAGE_GATE", ROOT / "data" / "models" / "gate.joblib"))
     )
+    # vote weights calibrated from human reviews (`modtriage calibrate --write`); defaults if absent
+    weights_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("MODTRIAGE_WEIGHTS", ROOT / "data" / "models" / "agent_weights.json")
+        )
+    )
     reports_dir: Path = field(default_factory=lambda: Path(os.environ.get("MODTRIAGE_REPORTS", ROOT / "reports")))
 
     @property
