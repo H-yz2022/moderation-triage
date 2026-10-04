@@ -39,6 +39,10 @@ def _b(name: str, default: bool) -> bool:
 @dataclass
 class Settings:
     # --- models -----------------------------------------------------------
+    # Master switch for real AI calls. Off by default while the AI review is in
+    # testing: with it off, nothing ever calls the Anthropic API (even if a key is
+    # set) and the whole system runs on the offline simulator.
+    ai_enabled: bool = field(default_factory=lambda: _b("MODTRIAGE_AI_ENABLED", False))
     # "mock" runs the whole system offline with deterministic heuristic agents.
     provider: str = field(default_factory=lambda: os.environ.get("MODTRIAGE_PROVIDER", "auto"))
     anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
@@ -51,6 +55,10 @@ class Settings:
 
     # --- routing / voting ---------------------------------------------------
     mode: str = field(default_factory=lambda: os.environ.get("MODTRIAGE_MODE", "cascade"))
+    # Which agents get the policy's worked examples: all | arbiter | none. Haiku only
+    # caches prompts >= 4096 tokens, so for the specialists the examples are paid in
+    # full on every call; the arbiter (Sonnet, 1024 minimum) reads them from cache.
+    policy_examples: str = field(default_factory=lambda: os.environ.get("MODTRIAGE_POLICY_EXAMPLES", "arbiter"))
     gate_allow_below: float = field(default_factory=lambda: _f("MODTRIAGE_GATE_ALLOW_BELOW", 0.04))
     remove_threshold: float = field(default_factory=lambda: _f("MODTRIAGE_REMOVE_THRESHOLD", 0.45))
     allow_threshold: float = field(default_factory=lambda: _f("MODTRIAGE_ALLOW_THRESHOLD", 0.45))
@@ -82,6 +90,8 @@ class Settings:
 
     @property
     def resolved_provider(self) -> str:
+        if not self.ai_enabled:
+            return "mock"
         if self.provider == "auto":
             return "anthropic" if self.anthropic_api_key else "mock"
         return self.provider

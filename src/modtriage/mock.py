@@ -10,10 +10,20 @@ pipeline smoke test, not a result to put on a resume.
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from .features import category_scores, style_features
-from .llm import LLMRequest, LLMResponse, estimate_tokens, price_call
+from .llm import (
+    _TOOL_JSON,
+    CACHE_MIN_TOKENS,
+    CACHE_TTL_S,
+    LLMRequest,
+    LLMResponse,
+    estimate_tokens,
+    price_call,
+)
 from .schemas import CallUsage
 
 CLAUSE_FOR = {
@@ -117,20 +127,43 @@ HANDLERS = {"text": _text_agent, "context": _context_agent, "arbiter": _arbiter,
 
 
 class MockClient:
-    def call(self, req: LLMRequest) -> LLMResponse:
+    """Heuristic votes with simulated token costs. Prompt caching is simulated
+    the way the API applies it: only when the prefix (tools + system) reaches
+    the model's minimum cacheable length, written at 1.25x, read at 0.1x while
+    the 5-minute TTL is warm. Below the minimum (every Haiku call here) the
+    whole prompt is billed at full price, as in production."""
+
+    def __init__(self):
+        self._warm: dict[tuple[str, int], float] = {}  # (model, prefix hash) -> last use
+        self._lock = threading.Lock()
+
+    def call(self, req: LLMRequest, cache: bool = True, batch: bool = False) -> LLMResponse:
         data = HANDLERS[req.agent](req.meta)
-        inp = estimate_tokens(req.system_policy + req.system_role + req.user)
+        total = estimate_tokens(_TOOL_JSON + req.system_policy + req.system_role + req.user)
         out = estimate_tokens(str(data))
-        # Conservative: no prompt-cache discount is simulated. A ~1k-token policy
-        # may be below the model's minimum cacheable prefix, so real runs may
-        # not get one either. Check cache_read_tokens in real usage.
+        prefix = req.prefix_tokens()
+        cr = cw = 0
+        if cache and prefix >= CACHE_MIN_TOKENS.get(req.model, 10**9):
+            k, now = (req.model, hash((req.system_policy, req.system_role))), time.time()
+            with self._lock:
+                warm = now - self._warm.get(k, -1e18) < CACHE_TTL_S
+                self._warm[k] = now
+            cr, cw = (prefix, 0) if warm else (0, prefix)
+        inp = total - cr - cw
         usage = CallUsage(
             agent=req.agent,
             model=req.model,
             input_tokens=inp,
             output_tokens=out,
-            cost_usd=price_call(req.model, inp, out),
+            cache_read_tokens=cr,
+            cache_write_tokens=cw,
+            cost_usd=price_call(req.model, inp, out, cr, cw, batch=batch),
             latency_ms=0.0,
             simulated=True,
+            batch=batch,
         )
         return LLMResponse(data=data, usage=usage)
+
+    def run_batch(self, reqs: dict[str, LLMRequest]) -> dict[str, LLMResponse]:
+        # Cache hits inside a batch are best-effort, so none are simulated.
+        return {k: self.call(r, cache=False, batch=True) for k, r in reqs.items()}

@@ -85,3 +85,7 @@ def test_search_exports_and_agreement(client):
     assert a["n_reviewed"] == 1 and set(a["calibration"]) >= {"text", "context", "arbiter"}
     assert "agent_weights" in client.get("/api/health").json()
     assert client.get("/api/policy").json()["examples"]
+
+
+def test_health_reports_ai_switch(client):
+    assert client.get("/api/health").json()["ai_enabled"] is False

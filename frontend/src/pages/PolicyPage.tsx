@@ -1,6 +1,12 @@
-import type { Policy } from "../types";
+import type { Health, Policy } from "../types";
 
-export default function PolicyPage({ policy }: { policy: Policy | null }) {
+const EXAMPLE_SCOPE: Record<string, string> = {
+  all: "Sent to every agent.",
+  arbiter: "Sent to the arbiter only. Haiku caches only prompts of 4096+ tokens, so the specialists would pay full price for them on every call, while the arbiter reads them from cache. Set MODTRIAGE_POLICY_EXAMPLES=all to send them to everyone.",
+  none: "Currently not sent to any agent (MODTRIAGE_POLICY_EXAMPLES=none).",
+};
+
+export default function PolicyPage({ policy, health }: { policy: Policy | null; health: Health | null }) {
   if (!policy) return <div className="card empty">Loading policy…</div>;
   return (
     <div className="stack">
@@ -42,8 +48,8 @@ export default function PolicyPage({ policy }: { policy: Policy | null }) {
         <div className="card">
           <h2>Worked examples</h2>
           <p className="small muted">
-            These go into the policy prompt every agent sees, to show where the boundaries sit. They're synthetic on purpose. Copying eval rows here would
-            leak the test set.
+            These show the agents where the boundaries sit. They're synthetic on purpose. Copying eval rows here would leak the test set.
+            {health?.policy_examples && <> {EXAMPLE_SCOPE[health.policy_examples]}</>}
           </p>
           {policy.examples.map((ex, i) => (
             <div key={i} style={{ marginTop: 12 }}>

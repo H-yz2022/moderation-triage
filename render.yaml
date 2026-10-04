@@ -7,6 +7,8 @@ services:
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: MODTRIAGE_AI_ENABLED  # AI review is still in testing; flip to "true" to call Claude
+        value: "false"
       - key: MODTRIAGE_MODE
         value: cascade
       - key: MODTRIAGE_MAX_DAILY_LLM_CALLS

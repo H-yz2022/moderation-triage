@@ -26,6 +26,14 @@ from .policy import load_policy
 DEV_SAMPLE = ROOT / "data" / "sample" / "dev_sample.jsonl"
 
 
+AI_OFF_MSG = "AI review is still in testing and is turned off: no AI model is called. Decisions come from the offline simulator. Set MODTRIAGE_AI_ENABLED=true to turn it on."
+
+
+def _ai_notice(s) -> None:
+    if not s.ai_enabled:
+        print(AI_OFF_MSG, file=sys.stderr)
+
+
 def _processed(s) -> Path:
     return Path(s.data_dir) / "processed"
 
@@ -124,12 +132,12 @@ def cmd_train_gate(a, s):
     )
 
 
-def _make_triage_factory(s, store_path=None):
+def _make_triage_factory(s, store_path=None, batching=False):
     from .pipeline import Triage
     from .store import Store
 
     store = Store(store_path or s.db_path)
-    return lambda: Triage(s, store=store), store
+    return lambda: Triage(s, store=store, batching=batching), store
 
 
 def cmd_moderate(a, s):
@@ -264,7 +272,9 @@ def cmd_eval(a, s):
         path = DEV_SAMPLE
     records = read_jsonl(path, limit=a.limit, seed=0 if a.limit else None)
     s.run_budget_usd = a.budget
-    make, _ = _make_triage_factory(s, a.db)
+    if a.batch:
+        s.use_cache = True  # batch results are delivered through the response cache
+    make, _ = _make_triage_factory(s, a.db, batching=a.batch)
     probe = make()
     provider = probe.provider
     modes = a.modes.split(",")
@@ -272,10 +282,11 @@ def cmd_eval(a, s):
         print("no trained gate found (run `train-gate`); skipping gate_only and the cascade gate tier")
         modes = [m for m in modes if m != "gate_only"]
     if provider != "mock" and not a.yes:
-        est = len(records) * len(modes) * 0.0025
+        est = len(records) * len(modes) * 0.0025 * (0.5 if a.batch else 1.0)
         print(
             f"About to call the real API: ~{len(records)} items x {a.modes}. Rough ceiling ~${est:.2f} "
-            f"(hard budget per mode: ${a.budget}). Re-run with --yes to proceed."
+            f"(hard budget per mode: ${a.budget}{'; Batch API, 50% off' if a.batch else ''}). "
+            "Re-run with --yes to proceed."
         )
         return
     report = run_eval(
@@ -287,6 +298,7 @@ def cmd_eval(a, s):
         Path(s.reports_dir),
         n_boot=a.boot,
         provider=provider,
+        batch=a.batch,
     )
     from .evaluation import to_markdown
 
@@ -358,6 +370,9 @@ def main(argv=None):
     e.add_argument("--budget", type=float, default=5.0, help="hard USD cap per mode")
     e.add_argument("--boot", type=int, default=500)
     e.add_argument("--db", help="SQLite path for the response cache (default: data/modtriage.db)")
+    e.add_argument(
+        "--batch", action="store_true", help="use the Message Batches API: 50%% cheaper, results in minutes-hours"
+    )
     e.add_argument("--yes", action="store_true")
     e.set_defaults(fn=cmd_eval)
 
@@ -367,7 +382,10 @@ def main(argv=None):
     sv.set_defaults(fn=cmd_serve)
 
     a = p.parse_args(argv)
-    a.fn(a, get_settings())
+    s = get_settings()
+    if a.cmd in ("moderate", "moderate-file", "eval"):
+        _ai_notice(s)
+    a.fn(a, s)
 
 
 if __name__ == "__main__":

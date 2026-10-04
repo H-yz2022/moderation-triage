@@ -79,6 +79,7 @@ class ReviewIn(BaseModel):
 def health():
     return {
         "ok": True,
+        "ai_enabled": settings.ai_enabled,
         "provider": triage.provider,
         "mode": settings.mode,
         "gate_loaded": triage.gate is not None,
@@ -87,6 +88,7 @@ def health():
         "arbiter_model": settings.arbiter_model,
         "modes": list(MODES),
         "agent_weights": triage.weights,
+        "policy_examples": settings.policy_examples,
     }
 
 

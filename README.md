@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/H-yz2022/moderation-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/H-yz2022/moderation-triage/actions/workflows/ci.yml)
 
+> **Status: the AI review is still in testing and is turned off by default.** With `MODTRIAGE_AI_ENABLED=false` (the default) nothing calls the Anthropic API, even if a key is set. Every feature runs on the offline simulator, and the UI shows a banner saying so. Set `MODTRIAGE_AI_ENABLED=true` in `.env` to turn it on.
+
 Specialist AI agents review each comment. They vote on whether it breaks a written policy, and every violation vote has to **cite the policy clause** it relies on. Clear cases are decided automatically. **Uncertain or high-severity cases go to a human review queue.** An eval harness measures **precision, recall, escalation rate and cost per 1,000 items** for each routing strategy on public toxicity data.
 
 ```
@@ -36,7 +38,7 @@ comment ─► $0 gate (TF-IDF) ─► text agent ─► context agent ─► we
 | **Citations are enforced in code.** Clause ids are checked against `policy/community_policy.yaml`. | A violation vote without a real clause is downgraded to an invalid abstain. A model that invents a policy can't remove anything. The category comes from the clause, never from the model. Evidence quotes must appear verbatim in the input. |
 | **Asymmetric guards.** | A hate or violence flag is never auto-allowed, even when the vote and the arbiter lean "allow". A high metadata risk blocks auto-allowing a split case. LLM errors, timeouts and an exhausted budget all **fail closed to escalation**. |
 | **The arbiter only runs on disagreement.** | The expensive model is called for a minority of items. If it isn't confident it abstains, and the item goes to a human. |
-| **Cost control in layers.** | A $0 local gate skips the panel for clearly benign items. The cascade calls the context agent only when needed. The metadata agent is rules ($0). Responses are cached by prompt hash (repeats and re-runs are free). The policy is sent as a `cache_control` system prefix. Every run has a hard USD budget. The API has a daily LLM-call cap and degrades to gate-only mode when it's hit. |
+| **Cost control in layers.** | A $0 local gate skips the panel for clearly benign items. The cascade calls the context agent only when needed. The metadata agent is rules ($0). Responses are cached by prompt hash (repeats and re-runs are free). Worked examples go to the arbiter only, where the prompt is long enough to cache. Specialist prompts stay lean because Haiku doesn't cache prompts under 4096 tokens. Evals can run through the Batch API at 50% off. Every run has a hard USD budget. The API has a daily LLM-call cap and degrades to gate-only mode when it's hit. |
 | **Human reviews feed back in.** | Every reviewed queue item is a labelled hard case. The queue reports how often the reviewer agreed with the system's lean, the arbiter and each specialist. `calibrate` turns per-agent accuracy into log-odds vote weights, and `export-reviews` turns the reviews into a gold set that `eval` can score any mode against. |
 | **The policy teaches by example.** | Clauses alone leave the boundaries fuzzy (quoting vs. endorsing, criticism of officials vs. insults, veiled threats). Synthetic worked examples in the YAML go into the cached policy prefix. Their clause and exception ids are validated at load, so an example can't cite a clause that doesn't exist. |
 | **The same code path runs offline.** | `MockClient` returns the same `cast_vote` payload from heuristics. Tests, CI and the UI all run with no API key, and costs are *simulated* from token estimates. |
@@ -47,7 +49,7 @@ comment ─► $0 gate (TF-IDF) ─► text agent ─► context agent ─► we
 cd moderation-triage
 python -m venv .venv; .venv\Scripts\activate
 pip install -r requirements-dev.txt; pip install --no-deps -e .
-copy .env.example .env          # add ANTHROPIC_API_KEY, or leave empty for mock mode
+copy .env.example .env          # AI is off by default (MODTRIAGE_AI_ENABLED=false): runs offline
 pytest -q                       # offline, no key needed
 
 # 1) data: Civil Comments (~400 MB from Hugging Face; ~2M labelled comments)
@@ -57,7 +59,8 @@ python -m modtriage.cli train-gate          # prints a suggested MODTRIAGE_GATE_
 
 # 2) eval: mock first (free), then real
 python -m modtriage.cli eval --data data/processed/eval_dev.jsonl        # mock if no key
-python -m modtriage.cli eval --limit 300 --yes                           # real API, hard $5 cap/mode
+python -m modtriage.cli eval --limit 300 --yes                           # real API (needs MODTRIAGE_AI_ENABLED=true), hard $5 cap/mode
+python -m modtriage.cli eval --limit 300 --yes --batch                   # same, Batch API: 50% off
 
 # 3) app
 # optional: moderate a whole file (JSONL, or CSV with a text column); escalations fill the review queue
@@ -112,11 +115,26 @@ Docker: `docker build -t modtriage . && docker run -p 8000:8000 --env-file .env 
 
 ## Cost notes
 
-Prices in `llm.py` (per million tokens, checked Sep 2026): Haiku 4.5 $1 in / $5 out; Sonnet 5 $2 in / $10 out. A specialist call is roughly 1.2k input and 100 output tokens, about **$0.002**. The mock eval estimates about $1.5 per 1k items for `single`, $3.3 for `full` and $2.5 for `cascade` on the dev fixture *before* the gate (policy v2, with worked examples, no cache discount). Most real traffic is benign, so the gate should cut these further. Measure it on your data.
+Prices in `llm.py` (per million tokens, checked Sep 2026): Haiku 4.5 $1 in / $5 out; Sonnet 5 $2 in / $10 out. Batch API: 50% off. Cache reads 0.1×, 5-minute cache writes 1.25×.
 
-- **Prompt caching.** The policy is marked with `cache_control`, but a prefix only caches above the model's minimum cacheable length. The policy now includes six worked examples, which grew the rendered policy from about 0.7k to 1.0k estimated tokens. That may still be under the model's minimum, so check `cache_read_tokens` in real usage. If nothing is cached, add more examples. The mock provider simulates *no* cache discount: adding the examples raised the simulated list cost on the dev fixture by about 28% ($1.1→$1.5 per 1k for `single`). That is also the real increase until the prefix actually caches, after which the repeated policy tokens bill at 0.1× input price.
-- **Batch API.** The Message Batches API is 50% cheaper and would be the natural next step for offline eval runs.
-- **Model retirement.** Anthropic lists Haiku 4.5's retirement as "not sooner than Oct 15 2026". Model ids are env vars, so swap `MODTRIAGE_SPECIALIST_MODEL` when a successor ships.
+**Measured (mock provider, 600-item Civil Comments test sample, gate on, list price per 1k items):**
+
+| configuration | single | full | cascade |
+|---|---|---|---|
+| worked examples sent to every agent | $1.71 | $3.56 | $1.70 |
+| **examples to the arbiter only (default)** | $1.39 | $2.93 | **$1.40** (−18%) |
+| **same, eval with `--batch`** | $0.70 | $1.56 | **$0.79** (−54%) |
+
+All three configurations make identical routing decisions. The savings come only from what the model is sent and how it's billed. The mock is not a model, so check the effect of dropping specialist examples on accuracy with a real `--yes` run on `eval_dev.jsonl` (`MODTRIAGE_POLICY_EXAMPLES=all` vs `arbiter`).
+
+What's behind those numbers:
+
+- **The cache minimum decides where examples go.** A prompt prefix only caches if it's at least as long as the model's minimum: **4096 tokens on Haiku 4.5** and 1024 on Sonnet 5. Nothing warns you when it's too short; the tokens are just billed at full price. The specialist prefix (tools + policy + role) is about 1.5k tokens, so on Haiku the `cache_control` marker does nothing. Every example token was paid in full on every specialist call. By default (`MODTRIAGE_POLICY_EXAMPLES=arbiter`), the examples go only to the arbiter, whose Sonnet prefix clears the 1024 minimum and is read from cache at 0.1×. Padding the specialist prompt past 4096 tokens to force caching only pays off under steady traffic (a cache write costs 1.25×, a hit 0.1×, and entries expire after 5 minutes idle). For a low-traffic API it costs *more*, so it isn't done.
+- **The cache breakpoint covers the whole system prompt** (tools + policy + role). The cacheable prefix gets longer at no extra cost, and it's byte-stable per agent: no timestamps or ids.
+- **`eval --batch`** runs evals through the Message Batches API at 50% off. Routing is sequential (in cascade mode, the context agent is called only if the text agent is unsure), so the eval runs in rounds. Each round replays every item, answers what it can from the response cache, and queues the first missing call of each item. One batch then resolves one tier. Two or three rounds cover every mode. Results usually take minutes, up to 24 hours. The budget check includes spend from earlier rounds. Requests a batch can't answer fall back to normal calls.
+- **Simulated costs model caching the way the API does.** The mock applies each model's minimum and the 5-minute TTL, so its numbers track what a real run would bill. It simulates no cache hits inside batches, because those are best-effort.
+- **Already in place:** the $0 gate, the cascade router, the $0 rules-based metadata agent, a response cache keyed by prompt hash (re-runs are free), hard run budgets and the daily call cap.
+- **Model retirement.** Anthropic lists Haiku 4.5's retirement as "not sooner than Oct 15 2026". Model ids are env vars, so swap `MODTRIAGE_SPECIALIST_MODEL` when a successor ships. Re-check the cache minimum for the new model, because it isn't the same across model generations.
 
 ## API
 
@@ -147,12 +165,12 @@ The moderation endpoints share a limit of 30 items per minute per IP, and a batc
 | `download` / `prepare` / `train-gate` | fetch Civil Comments, build the eval and gate splits, train the $0 gate |
 | `moderate "text" [--parent ...] [--metadata JSON]` | moderate one comment, print the decision JSON |
 | `moderate-file PATH [--text-col] [--out] [--mode] [--no-save] [--yes]` | moderate a JSONL/CSV file; escalations fill the review queue unless `--no-save` |
-| `eval [--data] [--modes] [--limit] [--budget] [--yes]` | ablation eval with a markdown/JSON report |
+| `eval [--data] [--modes] [--limit] [--budget] [--batch] [--yes]` | ablation eval with a markdown/JSON report; `--batch` uses the Batch API (50% off) |
 | `calibrate [--min-n 10] [--write]` | reviewer agreement report; `--write` saves the agent vote weights |
 | `export-reviews [--out]` | reviewed queue items as eval JSONL |
 | `serve [--host] [--port]` | API and built UI |
 
-Commands that call the real API print an estimate and stop unless you pass `--yes`.
+Commands that call the real API print an estimate and stop unless you pass `--yes`, and they only reach the API when `MODTRIAGE_AI_ENABLED=true`.
 
 ## Project layout
 
@@ -164,7 +182,8 @@ src/modtriage/
   pipeline.py    routing modes (gate_only | single | majority | full | cascade), budget + failure handling
   policy.py      policy loading, stable prompt rendering (incl. worked examples), citation validation
   feedback.py    reviewer agreement, agent-weight calibration, reviews -> eval gold set
-  llm.py         Anthropic client (tool-based structured output), response cache, pricing, budget ledger
+  llm.py         Anthropic client (tool-based structured output), Batch API, response cache, pricing and
+                 cache minimums, budget ledger
   mock.py        offline heuristic agents with simulated cost
   gate.py        TF-IDF + logistic regression $0 gate and recall-bounded threshold
   data.py        Civil Comments loaders, label mapping, stratified weighted sampling
@@ -173,7 +192,7 @@ src/modtriage/
   api/app.py     FastAPI (moderate, batch, queue search, review, agreement, CSV/JSONL export, usage, eval)
                  + serves the built UI
 frontend/        React + TS: Triage playground, Batch, Review queue (+ agreement), Evaluation dashboard, Policy
-tests/           48 offline tests (policy, voting, pipeline, eval, data, gate, feedback, CLI, API)
+tests/           57 offline tests (policy, voting, pipeline, eval, data, gate, feedback, cost, CLI, API)
 ```
 
 ## 2–3 week plan
@@ -182,7 +201,7 @@ tests/           48 offline tests (policy, voting, pipeline, eval, data, gate, f
 
 **Week 2: rigor.** Run the full ablation on `eval_test.jsonl` (600 items) and fill in the results table. Tune `remove/allow` thresholds and the gate threshold from the sweep. Error analysis: 3–5 failure buckets with examples (sarcasm, quoted slurs, reclaimed language, profanity vs insult, label noise). Optional: a `--context-only` eval on replies, to show what the context agent adds.
 
-**Week 3: product and polish.** Review ~30 escalated cases in the UI and compute how often the reviewer agreed with the arbiter's lean. Deploy to Render. Add a README demo GIF and the results. Run `calibrate` on those reviews and re-evaluate with the calibrated weights. Stretch goals: Batch API for evals, a ToxiGen or HateXplain cross-dataset check. (Few-shot policy examples and agent-weight calibration are already built.)
+**Week 3: product and polish.** Review ~30 escalated cases in the UI and compute how often the reviewer agreed with the arbiter's lean. Deploy to Render. Add a README demo GIF and the results. Run `calibrate` on those reviews and re-evaluate with the calibrated weights. Stretch goal: a ToxiGen or HateXplain cross-dataset check. (The Batch API eval path, few-shot policy examples and agent-weight calibration are already built.)
 
 ## Resume bullets (fill in the numbers after a real run)
 

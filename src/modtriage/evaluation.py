@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 
 from .data import record_to_item
+from .llm import BATCH_DISCOUNT, DeferredCall
 from .policy import Policy
 from .schemas import Decision, Vote
 from .voting import aggregate
@@ -228,6 +229,49 @@ def run_mode(triage, records: list[dict], mode: str, progress: bool = True) -> l
     return rows
 
 
+def prefetch_batched(triage, records: list[dict], mode: str, max_rounds: int = 4) -> dict[str, Any]:
+    """Fill the response cache through the Message Batches API (50% off), then
+    let `run_mode` score from the cache as usual.
+
+    Routing is sequential (cascade: text -> maybe context -> maybe arbiter), so
+    each round replays every item: calls already answered come from the cache,
+    and the first unanswered call of each item is queued instead of sent. One
+    batch per round resolves one tier, so 2-3 rounds cover every mode. Anything
+    a batch couldn't answer is called normally in the final pass.
+    """
+    batcher, cached = triage.batcher, triage.client
+    stats = {"rounds": 0, "batched_requests": 0}
+    committed = 0.0  # billed by earlier rounds; settled on the ledger in the final pass
+    cached.bill_unbilled = False
+    try:
+        for _ in range(max_rounds):
+            batcher.pending.clear()
+            batcher.collecting = True
+            for rec in records:
+                try:
+                    triage.moderate(record_to_item(rec), mode=mode, save=False)
+                except DeferredCall:
+                    pass
+            batcher.collecting = False
+            pending = dict(batcher.pending)
+            if not pending:
+                break
+            est = sum(r.estimated_cost() for r in pending.values()) * BATCH_DISCOUNT
+            if committed + est > triage.ledger.remaining:
+                print(f"  [{mode}] next batch (~${est:.2f}) exceeds the remaining budget; stopping batching")
+                break
+            stats["rounds"] += 1
+            stats["batched_requests"] += len(pending)
+            print(f"  [{mode}] batch round {stats['rounds']}: {len(pending)} requests (~${est:.4f})", flush=True)
+            for key, resp in batcher.run_batch(pending).items():
+                cached.put_unbilled(key, resp)
+                committed += resp.usage.cost_usd
+    finally:
+        batcher.collecting = False
+        cached.bill_unbilled = True
+    return stats
+
+
 def to_markdown(report: dict) -> str:
     L = [
         f"# Eval report - {report['dataset']}",
@@ -237,6 +281,7 @@ def to_markdown(report: dict) -> str:
         + (" (heuristic mock - pipeline smoke test, NOT model quality)" if report["provider"] == "mock" else ""),
         f"- items: {report['n_items']} (weighted: {report['weighted']})",
         f"- policy: {report['policy_version']}",
+        f"- pricing: {'Message Batches API (50% off)' if report.get('batch_api') else 'standard (synchronous)'}",
         "",
         "| mode | precision | auto recall | system recall | escalation | F1 (auto) | $/1k items | calls/item | p95 ms |",
         "|---|---|---|---|---|---|---|---|---|",
@@ -297,14 +342,18 @@ def run_eval(
     reports_dir: Path,
     n_boot: int = 500,
     provider: str = "mock",
+    batch: bool = False,
 ) -> dict:
     results, rows_by_mode = [], {}
     for mode in modes:
         tri = make_triage()  # fresh budget ledger per configuration
-        print(f"running mode={mode} on {len(records)} items")
+        print(f"running mode={mode} on {len(records)} items" + (" (Batch API)" if batch else ""))
+        bstats = prefetch_batched(tri, records, mode) if batch and mode != "gate_only" else None
         rows = run_mode(tri, records, mode)
         rows_by_mode[mode] = rows
         results.append(summarize(rows, policy, mode, n_boot))
+        if bstats:
+            results[-1]["cost"].update(bstats)
     sweep_mode = next((m for m in ("full", "cascade") if m in rows_by_mode), None)
     report = {
         "dataset": dataset,
@@ -312,6 +361,7 @@ def run_eval(
         "provider": provider,
         "policy_version": policy.version,
         "n_items": len(records),
+        "batch_api": batch,
         "weighted": any("weight" in r for r in records),
         "results": results,
         "sweep_mode": sweep_mode,

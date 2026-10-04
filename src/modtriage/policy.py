@@ -48,7 +48,7 @@ class Policy:
         return out
 
     # -- prompt -------------------------------------------------------------
-    def render(self) -> str:
+    def render(self, include_examples: bool = True) -> str:
         """Stable text rendering. Kept byte-identical across calls so it can be
         prompt-cached as the system prefix."""
         lines = [f"# {self.name} (version {self.version})", "", "## Violation clauses"]
@@ -58,7 +58,7 @@ class Policy:
         lines += ["", "## Exceptions (content matching these is allowed)"]
         for eid, e in self.exceptions.items():
             lines.append(f"- [{eid}] {e['title']}: {e['text']}")
-        if self.examples:
+        if include_examples and self.examples:
             lines += ["", "## Worked examples (how the clauses and exceptions apply)"]
             for i, ex in enumerate(self.examples, 1):
                 cites = ", ".join(ex["clause_ids"] + ex["exception_ids"]) or "none"

@@ -125,6 +125,7 @@ export interface Agreement {
 }
 
 export interface Health {
+  ai_enabled: boolean;
   provider: string;
   mode: string;
   gate_loaded: boolean;
@@ -133,6 +134,7 @@ export interface Health {
   arbiter_model: string;
   modes: string[];
   agent_weights: Record<string, number> | null;
+  policy_examples: "all" | "arbiter" | "none";
 }
 
 export interface Metrics {
