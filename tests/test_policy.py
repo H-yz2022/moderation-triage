@@ -34,3 +34,13 @@ def test_ungrounded_evidence_is_dropped():
     v = Vote(agent="text", label="violation", confidence=0.8, clause_ids=["HAR-1"], evidence="words never said")
     out = policy().validate_vote(v, "you are a clown")
     assert out.evidence == "" and "verbatim" in out.invalid_reason
+
+
+def test_worked_examples_are_rendered_into_the_prompt():
+    p = policy()
+    assert p.examples, "policy ships with worked examples"
+    text = p.render()
+    assert "## Worked examples" in text
+    for ex in p.examples:
+        assert repr(ex["text"]) in text
+        assert ex["label"] == "no_violation" or ex["clause_ids"]

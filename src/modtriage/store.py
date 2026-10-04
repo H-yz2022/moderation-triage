@@ -161,12 +161,27 @@ class Store:
                 out[k] = v
         return out
 
-    def list_decisions(self, limit: int = 50, status: str | None = None) -> list[dict]:
+    def list_decisions(
+        self, limit: int = 50, status: str | None = None, q: str | None = None, action: str | None = None
+    ) -> list[dict]:
+        where, params = [], []
         if status:
-            rows = self._all("SELECT * FROM decisions WHERE review_status=? ORDER BY id DESC LIMIT ?", (status, limit))
-        else:
-            rows = self._all("SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (limit,))
+            where.append("review_status=?")
+            params.append(status)
+        if action:
+            where.append("action=?")
+            params.append(action)
+        if q:
+            where.append("(text LIKE ? ESCAPE '!' OR parent_text LIKE ? ESCAPE '!')")
+            like = "%" + q.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            params += [like, like]
+        sql = "SELECT * FROM decisions" + (" WHERE " + " AND ".join(where) if where else "")
+        rows = self._all(sql + " ORDER BY id DESC LIMIT ?", (*params, limit))
         return [self._row(r) for r in rows]
+
+    def reviewed(self) -> list[dict]:
+        """Every human-reviewed decision, oldest first (feedback loop input)."""
+        return [self._row(r) for r in self._all("SELECT * FROM decisions WHERE review_status='reviewed' ORDER BY id")]
 
     def get_decision(self, decision_id: int) -> dict | None:
         rows = self._all("SELECT * FROM decisions WHERE id=?", (decision_id,))

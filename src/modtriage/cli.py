@@ -5,6 +5,9 @@ python -m modtriage.cli prepare --eval-n 600
 python -m modtriage.cli train-gate
 python -m modtriage.cli eval --modes gate_only,single,full,cascade --limit 300
 python -m modtriage.cli moderate "you are an idiot" --parent "I like trains"
+python -m modtriage.cli moderate-file comments.csv --out decisions.jsonl
+python -m modtriage.cli export-reviews        # human-reviewed queue items -> eval gold set
+python -m modtriage.cli calibrate --write     # agent vote weights from human reviews
 python -m modtriage.cli serve
 """
 
@@ -21,6 +24,14 @@ from .config import ROOT, get_settings
 from .policy import load_policy
 
 DEV_SAMPLE = ROOT / "data" / "sample" / "dev_sample.jsonl"
+
+
+AI_OFF_MSG = "AI review is still in testing and is turned off: no AI model is called. Decisions come from the offline simulator. Set MODTRIAGE_AI_ENABLED=true to turn it on."
+
+
+def _ai_notice(s) -> None:
+    if not s.ai_enabled:
+        print(AI_OFF_MSG, file=sys.stderr)
 
 
 def _processed(s) -> Path:
@@ -121,12 +132,12 @@ def cmd_train_gate(a, s):
     )
 
 
-def _make_triage_factory(s, store_path=None):
+def _make_triage_factory(s, store_path=None, batching=False):
     from .pipeline import Triage
     from .store import Store
 
     store = Store(store_path or s.db_path)
-    return lambda: Triage(s, store=store), store
+    return lambda: Triage(s, store=store, batching=batching), store
 
 
 def cmd_moderate(a, s):
@@ -141,6 +152,116 @@ def cmd_moderate(a, s):
     print(json.dumps(out, indent=1))
 
 
+def _read_items_file(path: Path, text_col: str) -> list[dict]:
+    """JSONL (eval-record shape) or CSV with a text column; parent_text/parent and id are optional."""
+    from .data import read_jsonl
+
+    if path.suffix.lower() == ".jsonl":
+        return read_jsonl(path)
+    import pandas as pd
+
+    df = pd.read_csv(path)
+    if text_col not in df.columns:
+        sys.exit(f"{path} has no {text_col!r} column (columns: {list(df.columns)}); pass --text-col")
+    parent_col = next((c for c in ("parent_text", "parent") if c in df.columns), None)
+    recs = []
+    for i, row in enumerate(df.to_dict(orient="records")):
+        text = row.get(text_col)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        parent = row.get(parent_col) if parent_col else None
+        recs.append(
+            {
+                "id": str(row.get("id", i)),
+                "text": text,
+                "parent_text": parent if isinstance(parent, str) and parent.strip() else None,
+            }
+        )
+    return recs
+
+
+def cmd_moderate_file(a, s):
+    from collections import Counter
+
+    from .data import record_to_item, write_jsonl
+
+    records = _read_items_file(Path(a.path), a.text_col)[: a.limit]
+    s.run_budget_usd = a.budget
+    make, _ = _make_triage_factory(s)
+    tri = make()
+    if tri.provider != "mock" and not a.yes:
+        print(
+            f"About to call the real API for {len(records)} items (mode {a.mode or s.mode}, "
+            f"hard budget ${a.budget}). Re-run with --yes to proceed."
+        )
+        return
+    out_rows, actions = [], Counter()
+    for i, rec in enumerate(records, 1):
+        d = tri.moderate(record_to_item(rec), mode=a.mode, save=not a.no_save)
+        actions[d.action] += 1
+        out_rows.append(
+            {
+                "id": rec.get("id"),
+                "text": rec["text"],
+                "action": d.action,
+                "decided_by": d.decided_by,
+                "clause_ids": d.clause_ids,
+                "categories": d.categories,
+                "score": d.score,
+                "reasons": d.reasons,
+                "cost_usd": d.cost_usd,
+                **({"label": rec["label"]} if "label" in rec else {}),
+            }
+        )
+        if i % 25 == 0:
+            print(f"  {i}/{len(records)}  spent ${tri.ledger.spent:.4f}", file=sys.stderr)
+    out = Path(a.out) if a.out else Path(a.path).with_suffix(".decisions.jsonl")
+    write_jsonl(out_rows, out)
+    total = sum(r["cost_usd"] for r in out_rows)
+    print(f"{len(out_rows)} items -> {out}")
+    print("  " + "  ".join(f"{k}: {actions.get(k, 0)}" for k in ("remove", "allow", "escalate")))
+    print(f"  spend ${total:.4f} ({tri.provider}{', simulated' if tri.provider == 'mock' else ''})")
+    if not a.no_save and actions.get("escalate"):
+        print(f"  {actions['escalate']} escalated item(s) are waiting in the review queue")
+
+
+def cmd_export_reviews(a, s):
+    from .data import write_jsonl
+    from .feedback import reviews_to_records
+    from .store import Store
+
+    recs = reviews_to_records(Store(s.db_path).reviewed(), load_policy(s.policy_path))
+    if not recs:
+        sys.exit("no reviewed decisions yet - review some escalated items in the queue first")
+    out = Path(a.out) if a.out else _processed(s) / "human_reviews.jsonl"
+    write_jsonl(recs, out)
+    pos = sum(r["label"] for r in recs)
+    print(f"wrote {len(recs)} human-reviewed items ({pos} removals) to {out}")
+    print(f"score any mode against them: python -m modtriage.cli eval --data {out}")
+
+
+def cmd_calibrate(a, s):
+    from .feedback import agreement_report, calibrate_weights, save_weights
+    from .store import Store
+
+    report = agreement_report(Store(s.db_path).reviewed())
+    if not report["n_reviewed"]:
+        sys.exit("no reviewed decisions yet - review some escalated items in the queue first")
+    cal = calibrate_weights(report, min_n=a.min_n)
+    la = report["lean_agreement"]
+    print(f"{report['n_reviewed']} reviewed items; reviewer agreed with the system's lean {la['rate']} (n={la['n']})")
+    print(f"\n{'agent':<10}{'n':>5}{'accuracy':>10}{'default':>9}{'weight':>8}")
+    for agent, c in cal.items():
+        acc = "-" if c["accuracy"] is None else f"{c['accuracy']:.2f}"
+        tag = "" if c["calibrated"] else f"  (kept default, n < {a.min_n})"
+        print(f"{agent:<10}{c['n']:>5}{acc:>10}{c['default']:>9.2f}{c['weight']:>8.2f}{tag}")
+    if a.write:
+        p = save_weights(s.weights_path, cal, report)
+        print(f"\nwrote {p}; the API and eval pick it up on next start")
+    else:
+        print("\nre-run with --write to use these weights")
+
+
 def cmd_eval(a, s):
     from .data import read_jsonl
     from .evaluation import run_eval
@@ -151,7 +272,9 @@ def cmd_eval(a, s):
         path = DEV_SAMPLE
     records = read_jsonl(path, limit=a.limit, seed=0 if a.limit else None)
     s.run_budget_usd = a.budget
-    make, _ = _make_triage_factory(s, a.db)
+    if a.batch:
+        s.use_cache = True  # batch results are delivered through the response cache
+    make, _ = _make_triage_factory(s, a.db, batching=a.batch)
     probe = make()
     provider = probe.provider
     modes = a.modes.split(",")
@@ -159,10 +282,11 @@ def cmd_eval(a, s):
         print("no trained gate found (run `train-gate`); skipping gate_only and the cascade gate tier")
         modes = [m for m in modes if m != "gate_only"]
     if provider != "mock" and not a.yes:
-        est = len(records) * len(modes) * 0.0025
+        est = len(records) * len(modes) * 0.0025 * (0.5 if a.batch else 1.0)
         print(
             f"About to call the real API: ~{len(records)} items x {a.modes}. Rough ceiling ~${est:.2f} "
-            f"(hard budget per mode: ${a.budget}). Re-run with --yes to proceed."
+            f"(hard budget per mode: ${a.budget}{'; Batch API, 50% off' if a.batch else ''}). "
+            "Re-run with --yes to proceed."
         )
         return
     report = run_eval(
@@ -174,6 +298,7 @@ def cmd_eval(a, s):
         Path(s.reports_dir),
         n_boot=a.boot,
         provider=provider,
+        batch=a.batch,
     )
     from .evaluation import to_markdown
 
@@ -218,6 +343,26 @@ def main(argv=None):
     m.add_argument("--mode")
     m.set_defaults(fn=cmd_moderate)
 
+    mf = sub.add_parser("moderate-file", help="moderate every row of a .jsonl or .csv file")
+    mf.add_argument("path")
+    mf.add_argument("--out", help="output JSONL (default: <path>.decisions.jsonl)")
+    mf.add_argument("--mode")
+    mf.add_argument("--text-col", default="text", help="CSV column holding the comment")
+    mf.add_argument("--limit", type=int)
+    mf.add_argument("--budget", type=float, default=5.0, help="hard USD cap for the run")
+    mf.add_argument("--no-save", action="store_true", help="don't store decisions / fill the review queue")
+    mf.add_argument("--yes", action="store_true")
+    mf.set_defaults(fn=cmd_moderate_file)
+
+    er = sub.add_parser("export-reviews", help="human-reviewed queue items -> eval JSONL")
+    er.add_argument("--out")
+    er.set_defaults(fn=cmd_export_reviews)
+
+    cb = sub.add_parser("calibrate", help="agent vote weights from human reviews")
+    cb.add_argument("--min-n", type=int, default=10, help="decisive votes an agent needs before it is re-weighted")
+    cb.add_argument("--write", action="store_true")
+    cb.set_defaults(fn=cmd_calibrate)
+
     e = sub.add_parser("eval")
     e.add_argument("--data")
     e.add_argument("--limit", type=int)
@@ -225,6 +370,9 @@ def main(argv=None):
     e.add_argument("--budget", type=float, default=5.0, help="hard USD cap per mode")
     e.add_argument("--boot", type=int, default=500)
     e.add_argument("--db", help="SQLite path for the response cache (default: data/modtriage.db)")
+    e.add_argument(
+        "--batch", action="store_true", help="use the Message Batches API: 50%% cheaper, results in minutes-hours"
+    )
     e.add_argument("--yes", action="store_true")
     e.set_defaults(fn=cmd_eval)
 
@@ -234,7 +382,10 @@ def main(argv=None):
     sv.set_defaults(fn=cmd_serve)
 
     a = p.parse_args(argv)
-    a.fn(a, get_settings())
+    s = get_settings()
+    if a.cmd in ("moderate", "moderate-file", "eval"):
+        _ai_notice(s)
+    a.fn(a, s)
 
 
 if __name__ == "__main__":

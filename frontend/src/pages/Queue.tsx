@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import { ActionPill, Clauses, VoteCard } from "../components/Votes";
-import type { Policy, StoredDecision } from "../types";
+import { ActionPill, Clauses, VoteCard, fmtPct } from "../components/Votes";
+import type { Agreement, Policy, StoredDecision } from "../types";
 
 type Filter = "pending" | "reviewed" | "auto";
 
@@ -13,21 +13,34 @@ export default function Queue({ policy }: { policy: Policy | null }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
+  const [agreement, setAgreement] = useState<Agreement | null>(null);
+
+  // debounce the search box so typing doesn't fire a request per keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setQ(search.trim()), 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const load = useCallback(async () => {
     try {
-      const [list, s] = await Promise.all([api.decisions(filter), api.queueStats()]);
+      const [list, s] = await Promise.all([api.decisions(filter, 100, q), api.queueStats()]);
       setItems(list);
       setStats(s);
       setSel((cur) => list.find((x) => x.id === cur?.id) ?? list[0] ?? null);
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [filter]);
+  }, [filter, q]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    api.agreement().then(setAgreement).catch(() => setAgreement(null));
+  }, [stats.reviewed]);
 
   useEffect(() => {
     setPicked(sel?.clause_ids ?? []);
@@ -49,10 +62,31 @@ export default function Queue({ policy }: { policy: Policy | null }) {
 
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
+  // keyboard: j/k move through the list, a = allow, r = remove (needs a clause picked)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement;
+      if (e.ctrlKey || e.metaKey || e.altKey || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
+      const i = items.findIndex((x) => x.id === sel?.id);
+      if (e.key === "j" || e.key === "k") {
+        const next = items[Math.min(Math.max(i + (e.key === "j" ? 1 : -1), 0), items.length - 1)];
+        if (next) setSel(next);
+      } else if (sel?.review_status === "pending" && e.key === "a") {
+        decide("allow");
+      } else if (sel?.review_status === "pending" && e.key === "r" && picked.length > 0) {
+        decide("remove");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   return (
-    <div className="grid side">
+    <div className="stack">
+      {agreement && agreement.n_reviewed > 0 && <AgreementCard a={agreement} />}
+      <div className="grid side">
       <div className="card" style={{ padding: 0 }}>
-        <div className="row spread" style={{ padding: 12, borderBottom: "1px solid var(--border)" }}>
+        <div className="stack" style={{ padding: 12, borderBottom: "1px solid var(--border)", gap: 8 }}>
           <div className="tabs" role="tablist">
             {(["pending", "reviewed", "auto"] as Filter[]).map((f) => (
               <button key={f} role="tab" aria-selected={filter === f} className={`tab ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
@@ -60,8 +94,16 @@ export default function Queue({ policy }: { policy: Policy | null }) {
               </button>
             ))}
           </div>
+          <input type="search" aria-label="Search comments" placeholder="Search comment text…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="row spread small muted">
+            <span><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> allow · <kbd>r</kbd> remove</span>
+            <span className="row">
+              <a href={`/api/export/decisions.csv?status=${filter}`} download>CSV</a>
+              <a href="/api/export/reviews.jsonl" download title="Reviewed cases in eval format: modtriage eval --data human_reviews.jsonl">gold set</a>
+            </span>
+          </div>
         </div>
-        {items.length === 0 && <div className="empty">Nothing here yet.</div>}
+        {items.length === 0 && <div className="empty">{q ? `No ${filter} items match “${q}”.` : "Nothing here yet."}</div>}
         {items.map((d) => (
           <div key={d.id} className={`queue-item ${sel?.id === d.id ? "selected" : ""}`} onClick={() => setSel(d)}
             role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setSel(d)}>
@@ -139,6 +181,65 @@ export default function Queue({ policy }: { policy: Policy | null }) {
           </>
         )}
       </div>
+      </div>
     </div>
+  );
+}
+
+const AGENT_NAMES: Record<string, string> = { text: "Text", context: "Context", metadata: "Metadata", arbiter: "Arbiter" };
+
+function AgreementCard({ a }: { a: Agreement }) {
+  return (
+    <details className="card">
+      <summary style={{ cursor: "pointer" }}>
+        <h3 style={{ display: "inline" }}>Reviewer agreement</h3>
+        <span className="small muted" style={{ marginLeft: 12 }}>
+          {a.n_reviewed} reviewed · the reviewer agreed with the system's lean {fmtPct(a.lean_agreement.rate, 0)} of the time (n={a.lean_agreement.n})
+        </span>
+      </summary>
+      <div className="stack" style={{ marginTop: 12 }}>
+        <p className="small muted">
+          Reviewed cases are the escalated, hard ones, so these rates understate accuracy on the whole stream. They show whom to trust when the panel
+          disagrees. Run <span className="mono">modtriage calibrate --write</span> to apply the suggested weights.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>agent</th><th className="num">votes</th><th className="num">abstained</th><th className="num">agreed w/ reviewer</th><th className="num">precision</th><th className="num">recall</th><th className="num">weight now</th><th className="num">suggested</th></tr>
+            </thead>
+            <tbody>
+              {Object.entries(a.agents).map(([name, s]) => {
+                const cal = a.calibration[name];
+                const now = a.active_weights?.[name] ?? cal?.default;
+                return (
+                  <tr key={name}>
+                    <td>{AGENT_NAMES[name] ?? name}</td>
+                    <td className="num">{s.n}</td>
+                    <td className="num">{s.abstain}</td>
+                    <td className="num">{fmtPct(s.accuracy, 0)}</td>
+                    <td className="num">{fmtPct(s.precision, 0)}</td>
+                    <td className="num">{fmtPct(s.recall, 0)}</td>
+                    <td className="num">{now?.toFixed(2) ?? "–"}</td>
+                    <td className="num">
+                      {!cal ? "–" : cal.calibrated ? cal.weight.toFixed(2) : <span className="muted" title={`needs more reviewed votes (has ${cal.n})`}>{cal.weight.toFixed(2)}*</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="row small">
+          <span>Reviewer decisions: {Object.entries(a.reviewer_actions).map(([k, v]) => `${k} ${v}`).join(" · ")}</span>
+          {a.clause_agreement.mean_jaccard != null && (
+            <span className="muted">· clause overlap on removals {fmtPct(a.clause_agreement.mean_jaccard, 0)} (n={a.clause_agreement.n})</span>
+          )}
+          {Object.entries(a.by_route).map(([route, r]) => (
+            <span key={route} className="muted">· via {route.replace("_", " ")}: {fmtPct(r.rate, 0)} of {r.n}</span>
+          ))}
+        </div>
+        <p className="small muted">* default kept until the agent has enough reviewed votes.</p>
+      </div>
+    </details>
   );
 }

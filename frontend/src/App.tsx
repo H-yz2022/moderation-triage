@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import Batch from "./pages/Batch";
 import Eval from "./pages/Eval";
 import PolicyPage from "./pages/PolicyPage";
 import Queue from "./pages/Queue";
@@ -8,6 +9,7 @@ import type { Health, Policy } from "./types";
 
 const TABS = [
   { id: "triage", label: "Triage" },
+  { id: "batch", label: "Batch" },
   { id: "queue", label: "Review queue" },
   { id: "eval", label: "Evaluation" },
   { id: "policy", label: "Policy" },
@@ -48,18 +50,27 @@ export default function App() {
         <div className="status">
           {health && (
             <>
-              <span className="pill">{health.provider === "mock" ? "mock provider (offline)" : `${health.specialist_model} → ${health.arbiter_model}`}</span>
+              <span className="pill">
+                {!health.ai_enabled ? "AI off · in testing" : health.provider === "mock" ? "mock provider (offline)" : `${health.specialist_model} → ${health.arbiter_model}`}
+              </span>
               <span className="pill">gate {health.gate_loaded ? "on" : "off"}</span>
               <span className="pill">mode {health.mode}</span>
             </>
           )}
         </div>
       </header>
+      {health && !health.ai_enabled && (
+        <div className="banner" role="status" style={{ marginBottom: 16 }}>
+          <b>AI review is still in testing and is turned off.</b> No AI model is called. The votes, decisions and costs you see come from the offline
+          simulator (rule-based heuristics), not from Claude.
+        </div>
+      )}
       {err && <div className="error" style={{ marginBottom: 16 }}>API unreachable: {err}</div>}
       {tab === "triage" && <Triage health={health} policy={policy} />}
+      {tab === "batch" && <Batch health={health} policy={policy} />}
       {tab === "queue" && <Queue policy={policy} />}
       {tab === "eval" && <Eval />}
-      {tab === "policy" && <PolicyPage policy={policy} />}
+      {tab === "policy" && <PolicyPage policy={policy} health={health} />}
     </div>
   );
 }

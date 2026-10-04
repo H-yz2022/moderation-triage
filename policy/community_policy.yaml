@@ -1,7 +1,7 @@
 # Community content policy used by every agent.
 # Agents MUST cite clause ids from this file; votes citing unknown ids are
 # discarded by the validator (see src/modtriage/policy.py).
-version: "2026.09-v1"
+version: "2026.09-v2"
 name: "Community Comment Policy"
 
 categories:
@@ -121,6 +121,37 @@ exceptions:
     title: Non-directed mild profanity
     text: >-
       Mild profanity used for emphasis and not aimed at a person is allowed.
+
+# Worked examples, rendered into the (cached) policy prefix. They teach the
+# boundaries the clauses alone leave fuzzy. Keep them synthetic: never copy
+# rows from the eval data, or the eval stops measuring generalisation.
+# Every id is validated at load time.
+examples:
+  - text: "Only an idiot would believe the council's numbers, and you clearly do."
+    label: violation
+    clause_ids: [HAR-1]
+    why: Attacks the other participant ("you clearly do"), not just the idea.
+  - text: "The council's budget is a joke and the mayor should resign over it."
+    label: no_violation
+    exception_ids: [EX-3]
+    why: Harsh, but aimed at an institution and an official's public conduct.
+  - text: "Someone upthread wrote that all refugees are criminals. That's bigoted and wrong."
+    label: no_violation
+    exception_ids: [EX-1, EX-2]
+    why: Quotes a hateful generalisation in order to condemn it.
+  - text: "Damn, that's a great point, I hadn't thought of that."
+    label: no_violation
+    exception_ids: [EX-4]
+    why: Mild profanity for emphasis, not aimed at anyone.
+  - text: "Agreed, the guy is a clown. Somebody should tell him to log off for good."
+    parent: "This poster keeps spamming the thread with nonsense, what a loser."
+    label: violation
+    clause_ids: [HAR-3, HAR-1]
+    why: Joins and escalates an attack on another user.
+  - text: "Keep posting my address and we'll see how brave you are in person."
+    label: violation
+    clause_ids: [VIO-1]
+    why: A conditional, veiled threat of physical harm is still a threat.
 
 actions:
   remove: Content violates at least one clause with sufficient agreement.

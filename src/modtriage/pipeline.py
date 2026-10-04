@@ -15,8 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .agents import Arbiter, ContextAgent, MetadataAgent, TextAgent
 from .config import Settings, get_settings
+from .feedback import load_weights
 from .gate import Gate
-from .llm import AnthropicClient, BudgetLedger, CachedClient, LLMClient
+from .llm import AnthropicClient, BatchingClient, BudgetLedger, CachedClient, LLMClient
 from .mock import MockClient
 from .policy import load_policy
 from .schemas import CallUsage, Decision, Item, Vote
@@ -24,6 +25,7 @@ from .store import Store
 from .voting import Tally, aggregate, apply_guards, majority
 
 MODES = ("gate_only", "single", "majority", "full", "cascade")
+EXAMPLE_SCOPES = ("all", "arbiter", "none")
 
 
 class Triage:
@@ -35,6 +37,7 @@ class Triage:
         gate: Gate | None | bool = True,
         ledger: BudgetLedger | None = None,
         weights: dict[str, float] | None = None,
+        batching: bool = False,
     ):
         self.s = s = settings or get_settings()
         self.policy = load_policy(s.policy_path)
@@ -44,17 +47,27 @@ class Triage:
             client = MockClient() if self.provider == "mock" else AnthropicClient(s.anthropic_api_key, s.llm_timeout_s)
         else:
             self.provider = type(client).__name__
+        if batching:
+            client = BatchingClient(client)
+        self.batcher: BatchingClient | None = client if batching else None
         if s.use_cache and store is not None:
             client = CachedClient(client, store)
+        elif batching:
+            raise ValueError("batch mode needs the response cache (a store and use_cache=True)")
         self.client = client
         self.gate: Gate | None = Gate.load(s.gate_path) if gate is True else (gate or None)
         self.ledger = ledger or BudgetLedger(s.run_budget_usd)
-        self.weights = weights
+        self.weights = weights if weights is not None else load_weights(s.weights_path)
+        if s.policy_examples not in EXAMPLE_SCOPES:
+            raise ValueError(f"policy_examples must be one of {EXAMPLE_SCOPES}")
         p, c, m = self.policy, client, self.ledger
-        self.text_agent = TextAgent(p, c, s.specialist_model, m)
-        self.context_agent = ContextAgent(p, c, s.specialist_model, m)
-        self.metadata_agent = MetadataAgent(p, c, s.specialist_model, m, use_llm=s.metadata_agent_uses_llm)
-        self.arbiter = Arbiter(p, c, s.arbiter_model, m)
+        spec_ex, arb_ex = s.policy_examples == "all", s.policy_examples != "none"
+        self.text_agent = TextAgent(p, c, s.specialist_model, m, examples=spec_ex)
+        self.context_agent = ContextAgent(p, c, s.specialist_model, m, examples=spec_ex)
+        self.metadata_agent = MetadataAgent(
+            p, c, s.specialist_model, m, examples=spec_ex, use_llm=s.metadata_agent_uses_llm
+        )
+        self.arbiter = Arbiter(p, c, s.arbiter_model, m, examples=arb_ex)
 
     # ------------------------------------------------------------------
     def moderate(self, item: Item, mode: str | None = None, save: bool = True, llm_allowed: bool = True) -> Decision:

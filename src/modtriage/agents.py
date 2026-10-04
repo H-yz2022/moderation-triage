@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from .features import category_scores, style_features
-from .llm import BudgetLedger, LLMClient, LLMError, LLMRequest
+from .llm import BudgetLedger, DeferredCall, LLMClient, LLMError, LLMRequest
 from .policy import Policy
 from .schemas import CallUsage, Item, Vote
 
@@ -72,9 +72,9 @@ class LLMAgent:
     name = "base"
     role = ""
 
-    def __init__(self, policy: Policy, client: LLMClient, model: str, ledger: BudgetLedger):
+    def __init__(self, policy: Policy, client: LLMClient, model: str, ledger: BudgetLedger, examples: bool = True):
         self.policy, self.client, self.model, self.ledger = policy, client, model, ledger
-        self._policy_text = policy.render()
+        self._policy_text = policy.render(include_examples=examples)
 
     def build_user(self, item: Item, ctx: dict) -> str:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -108,6 +108,9 @@ class LLMAgent:
             ), None
         try:
             resp = self.client.call(req)
+        except DeferredCall:
+            self.ledger.settle(est, 0.0)  # queued for a batch: release the reservation, retry next round
+            raise
         except LLMError as e:
             self.ledger.settle(est, 0.0)
             return Vote(

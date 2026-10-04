@@ -62,6 +62,7 @@ class CallUsage(BaseModel):
     latency_ms: float = 0.0
     cached: bool = False  # served from our response cache (no API call)
     simulated: bool = False  # mock provider: cost is an estimate of what it *would* cost
+    batch: bool = False  # billed at Message Batches API prices (50% off)
 
 
 class Decision(BaseModel):
