@@ -24,6 +24,7 @@ from .config import ROOT, get_settings
 from .policy import load_policy
 
 DEV_SAMPLE = ROOT / "data" / "sample" / "dev_sample.jsonl"
+DEMO_SAMPLE = ROOT / "data" / "sample" / "demo_samples.jsonl"
 
 
 AI_OFF_MSG = "AI review is still in testing and is turned off: no AI model is called. Decisions come from the offline simulator. Set MODTRIAGE_AI_ENABLED=true to turn it on."
@@ -92,6 +93,30 @@ def cmd_prepare(a, s):
     print(
         f"wrote gate_train ({len(tr)}), gate_val ({len(va)}), eval_test ({len(sample)}), eval_dev ({len(dsample)}) to {out}"
     )
+
+
+def cmd_demo_sample(a, s):
+    """Build the UI's browsable example set from the Civil Comments validation split."""
+    from collections import Counter
+
+    from . import data
+
+    raw = Path(a.csv) if a.csv else Path(s.data_dir) / "raw" / "civil_comments_hf.csv"
+    if not raw.exists():
+        alt = Path(s.data_dir) / "raw" / "civil_comments.csv"
+        raw = alt if alt.exists() else raw
+    if not raw.exists():
+        sys.exit(f"{raw} not found - run `download` first (or pass --csv)")
+    print(f"loading {raw} ...")
+    df = data.load_raw(raw)
+    df = data.add_labels(df[df["split"] == "validation"], load_policy(s.policy_path))
+    recs = data.demo_sample(df, per_category=a.per_category, clean_n=a.clean, seed=a.seed)
+    out = Path(a.out) if a.out else DEMO_SAMPLE
+    data.write_jsonl(recs, out)
+    counts = Counter(
+        c for r in recs for c in (r["categories"] or (["toxic (no sub-label)"] if r["label"] else ["none"]))
+    )
+    print(f"wrote {len(recs)} examples to {out}: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
 
 def cmd_train_gate(a, s):
@@ -329,6 +354,14 @@ def main(argv=None):
     pr.add_argument("--context-only", action="store_true", help="eval only on replies (have parent_text)")
     pr.add_argument("--seed", type=int, default=13)
     pr.set_defaults(fn=cmd_prepare)
+
+    ds = sub.add_parser("demo-sample", help="build the UI's example set from Civil Comments (validation split)")
+    ds.add_argument("--csv")
+    ds.add_argument("--out")
+    ds.add_argument("--per-category", type=int, default=60)
+    ds.add_argument("--clean", type=int, default=200)
+    ds.add_argument("--seed", type=int, default=7)
+    ds.set_defaults(fn=cmd_demo_sample)
 
     g = sub.add_parser("train-gate")
     g.add_argument("--dev", action="store_true")

@@ -52,6 +52,7 @@ class ModerateIn(BaseModel):
     parent_text: str | None = Field(default=None, max_length=10_000)
     metadata: Metadata = Field(default_factory=Metadata)
     mode: str | None = None
+    save: bool = True  # False = preview: decide but don't store it or fill the review queue
 
 
 MAX_BATCH = 25
@@ -110,12 +111,16 @@ def _check_mode(mode: str | None) -> None:
         raise HTTPException(400, f"mode must be one of {MODES}")
 
 
-def _moderate_one(item: Item, mode: str | None) -> dict:
+def _moderate_one(item: Item, mode: str | None, save: bool = True) -> dict:
     # re-checked per item so a batch can't run past the daily cap
     llm_allowed = store.calls_today() < settings.max_daily_llm_calls
     item.text = item.text[: settings.max_text_chars]
     d = triage.moderate(item, mode=mode, save=False, llm_allowed=llm_allowed)
-    decision_id = store.save_decision(item, d)
+    if save:
+        decision_id = store.save_decision(item, d)
+    else:
+        decision_id = None
+        store.record_usage(d)  # previews still count toward the daily LLM cap
     out = d.model_dump()
     out.update(
         id=decision_id,
@@ -135,7 +140,7 @@ def moderate(body: ModerateIn, request: Request):
     item = Item(
         id=f"api-{int(time.time() * 1000)}", text=body.text, parent_text=body.parent_text, metadata=body.metadata
     )
-    return _moderate_one(item, body.mode)
+    return _moderate_one(item, body.mode, save=body.save)
 
 
 @app.post("/api/moderate/batch")
@@ -255,8 +260,14 @@ def eval_latest():
 
 @app.get("/api/samples")
 def samples():
-    p = ROOT / "data" / "sample" / "dev_sample.jsonl"
-    return read_jsonl(p) if p.exists() else []
+    """Hand-written examples first (they include parent comments, metadata and
+    spam), then the Civil Comments demo set when it's present."""
+    out = []
+    for name, source in (("dev_sample.jsonl", "curated"), ("demo_samples.jsonl", "civil_comments")):
+        p = ROOT / "data" / "sample" / name
+        if p.exists():
+            out += [{**r, "source": r.get("source", source)} for r in read_jsonl(p)]
+    return out
 
 
 # ---- static UI --------------------------------------------------------------

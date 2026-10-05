@@ -28,7 +28,7 @@ export interface Usage {
 }
 
 export interface DecisionOut {
-  id: number;
+  id: number | null; // null for previews (not saved)
   item_id: string;
   action: Action;
   categories: string[];
@@ -180,4 +180,5 @@ export interface Sample {
   metadata: Record<string, unknown>;
   label: number;
   categories: string[];
+  source?: "curated" | "civil_comments";
 }

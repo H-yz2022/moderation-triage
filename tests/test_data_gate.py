@@ -66,3 +66,25 @@ def test_gate_trains_and_threshold_caps_recall_loss():
     thr = choose_threshold(sc, y, max_recall_loss=0.1)
     lost = ((sc < thr) & (y == 1)).sum() / y.sum()
     assert lost <= 0.1
+
+
+def test_demo_sample_covers_categories_and_length_limits():
+    import pandas as pd
+
+    from modtriage.data import demo_sample
+
+    rows = []
+    for i in range(400):
+        cats = [["harassment"], ["hate"], [], []][i % 4]
+        rows.append(
+            {
+                "id": str(i),
+                "text": f"comment number {i} " + "x" * (i % 7) * 100,
+                "label": int(bool(cats) or i % 8 == 3),
+                "categories": cats,
+            }
+        )
+    recs = demo_sample(pd.DataFrame(rows), per_category=10, clean_n=20, other_toxic_n=5, max_chars=500)
+    assert all(20 <= len(r["text"]) <= 500 for r in recs)
+    assert sum("hate" in r["categories"] for r in recs) == 10 and sum(r["label"] == 0 for r in recs) == 20
+    assert len({r["id"] for r in recs}) == len(recs) and all(r["id"].startswith("cc-") for r in recs)
