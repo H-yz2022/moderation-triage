@@ -157,6 +157,45 @@ def to_records(df: pd.DataFrame, weights: pd.Series | None = None) -> list[dict[
     return out
 
 
+def demo_sample(
+    df: pd.DataFrame,
+    per_category: int = 60,
+    clean_n: int = 200,
+    other_toxic_n: int = 40,
+    min_chars: int = 20,
+    max_chars: int = 500,
+    seed: int = 7,
+) -> list[dict[str, Any]]:
+    """A browsable demo set for the UI: up to `per_category` comments for each
+    policy category, `other_toxic_n` toxic comments with no sub-label, and
+    `clean_n` non-violations. Short-to-medium comments only, so they read well
+    on a phone. Expects `add_labels` output; pass the validation split so the
+    demo never shows eval test items."""
+    n_chars = df["text"].astype(str).str.len()
+    pool = df[(n_chars >= min_chars) & (n_chars <= max_chars)]
+    picked: list[pd.DataFrame] = []
+    taken: set[str] = set()
+
+    def take(frame: pd.DataFrame, n: int) -> None:
+        frame = frame[~frame["id"].isin(taken)]
+        if len(frame):
+            got = frame.sample(min(n, len(frame)), random_state=seed)
+            taken.update(got["id"])
+            picked.append(got)
+
+    cats = sorted({c for cs in pool["categories"] for c in cs})
+    for cat in cats:
+        take(pool[pool["categories"].map(lambda cs, c=cat: c in cs)], per_category)
+    take(pool[(pool["label"] == 1) & (pool["categories"].map(len) == 0)], other_toxic_n)
+    take(pool[pool["label"] == 0], clean_n)
+    out = pd.concat(picked).sample(frac=1, random_state=seed)
+    recs = to_records(out)
+    for r in recs:
+        r["id"] = f"cc-{r['id']}"
+        r["source"] = "civil_comments"
+    return recs
+
+
 def stratified_sample(df: pd.DataFrame, n: int, pos_frac: float, seed: int = 13) -> tuple[pd.DataFrame, pd.Series]:
     """Oversample violations for statistical power; return per-row weights that
     re-weight metrics back to the population prevalence."""

@@ -22,7 +22,7 @@ export const api = {
   health: () => req<Health>("/api/health"),
   policy: () => req<Policy>("/api/policy"),
   samples: () => req<Sample[]>("/api/samples"),
-  moderate: (body: { text: string; parent_text?: string | null; metadata?: Record<string, unknown>; mode?: string }) =>
+  moderate: (body: { text: string; parent_text?: string | null; metadata?: Record<string, unknown>; mode?: string; save?: boolean }) =>
     req<DecisionOut>("/api/moderate", { method: "POST", body: JSON.stringify(body) }),
   moderateBatch: (items: BatchItem[], mode?: string) =>
     req<BatchOut>("/api/moderate/batch", { method: "POST", body: JSON.stringify({ items, mode: mode || undefined }) }),

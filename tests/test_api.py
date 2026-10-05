@@ -89,3 +89,18 @@ def test_search_exports_and_agreement(client):
 
 def test_health_reports_ai_switch(client):
     assert client.get("/api/health").json()["ai_enabled"] is False
+
+
+def test_samples_combine_curated_and_civil_comments(client):
+    rows = client.get("/api/samples").json()
+    assert rows[0]["id"].startswith("dev-") and rows[0]["source"] == "curated"
+    assert any(r["id"] == "dev-002" for r in rows)  # the UI's default example
+    cc = [r for r in rows if r["source"] == "civil_comments"]
+    assert len(cc) >= 300 and all(r["id"].startswith("cc-") for r in cc)
+
+
+def test_preview_is_not_saved(client):
+    before = len(client.get("/api/decisions").json())
+    r = client.post("/api/moderate", json={"text": "You are an idiot.", "mode": "full", "save": False}).json()
+    assert r["id"] is None and r["action"] in ("remove", "allow", "escalate")
+    assert len(client.get("/api/decisions").json()) == before

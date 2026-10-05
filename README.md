@@ -22,7 +22,7 @@ comment ─► $0 gate (TF-IDF) ─► text agent ─► context agent ─► we
 
 | Area | What you get |
 |---|---|
-| **Triage** | Moderate one comment (with optional parent comment and metadata) under any routing mode. See every vote, the cited clauses and the per-call cost. |
+| **Triage** | Opens with an example already selected and its result shown. Browse 588 labelled comments (48 hand-written, 540 real ones from Civil Comments) by category, step through them or pick one at random, or paste your own. Each result shows every vote, the cited clauses and the per-call cost. |
 | **Batch** | Moderate up to 25 comments at once in the UI (one per line or JSONL), or a whole JSONL/CSV file with `moderate-file`. Download the decisions as JSONL. |
 | **Review queue** | Escalated items wait for a human. You can search by text and use keyboard shortcuts (`j`/`k` to move, `a` to allow, `r` to remove). A removal must cite a clause. Decisions export as CSV. |
 | **Feedback loop** | A *Reviewer agreement* panel shows how often reviewers agreed with the system's lean, the arbiter and each agent. `calibrate` turns that into vote weights. `export-reviews` turns reviewed cases into an eval gold set. |
@@ -69,6 +69,8 @@ python -m modtriage.cli moderate-file comments.csv --text-col comment --out deci
 python -m modtriage.cli serve               # API on :8000
 cd frontend; npm install; npm run dev       # UI on :5173 (proxies /api)
 ```
+
+The example browser in the UI uses `data/sample/demo_samples.jsonl`: 540 comments (about 60 per category plus 200 non-violations, 20–500 characters each) drawn from the Civil Comments validation split, so it never shows eval test items. Civil Comments is released under CC0 (public domain); the comments are real and some are offensive, and the labels are crowd ratings that can be noisy. Rebuild it with `python -m modtriage.cli demo-sample`.
 
 `download` first tries the original Civil Comments v1.2 zip, which includes the parent comment for the context agent. That Google-hosted copy now returns HTTP 403, so it falls back automatically to Hugging Face `google/civil_comments` (text and labels only, no parent comments). To get parent comments and reaction counts, download Kaggle's *Jigsaw Unintended Bias* `all_data.csv` yourself and run `prepare --csv path\to\all_data.csv`. That file's `rating` column is dropped on purpose because it leaks the moderation outcome.
 
@@ -142,7 +144,7 @@ What's behind those numbers:
 |---|---|---|
 | `GET` | `/api/health` | provider, models, routing mode, gate status, active agent weights |
 | `GET` | `/api/policy` | clauses, exceptions, categories, worked examples |
-| `POST` | `/api/moderate` | moderate one item: `{text, parent_text?, metadata?, mode?}` |
+| `POST` | `/api/moderate` | moderate one item: `{text, parent_text?, metadata?, mode?, save?}`; `save: false` previews without storing it |
 | `POST` | `/api/moderate/batch` | moderate up to 25 items: `{items: [{text, parent_text?, metadata?, id?}], mode?}` |
 | `GET` | `/api/decisions` | list decisions; filters `status` (`pending`/`reviewed`/`auto`), `action`, `q` (text search), `limit` |
 | `GET` | `/api/decisions/{id}` | one decision with its votes and usage |
@@ -153,6 +155,7 @@ What's behind those numbers:
 | `GET` | `/api/export/reviews.jsonl` | reviewed cases as an eval gold set |
 | `GET` | `/api/usage` | LLM calls, tokens and spend by model and agent; daily cap |
 | `GET` | `/api/eval/latest` | latest eval report |
+| `GET` | `/api/samples` | labelled examples for the UI (hand-written first, then Civil Comments) |
 
 The moderation endpoints share a limit of 30 items per minute per IP, and a batch counts every item. The daily LLM cap is checked per item, so a batch can't overrun it.
 
@@ -163,6 +166,7 @@ The moderation endpoints share a limit of 30 items per minute per IP, and a batc
 | Command | Purpose |
 |---|---|
 | `download` / `prepare` / `train-gate` | fetch Civil Comments, build the eval and gate splits, train the $0 gate |
+| `demo-sample [--per-category 60] [--clean 200]` | rebuild the UI's example set (`data/sample/demo_samples.jsonl`) from the Civil Comments **validation** split |
 | `moderate "text" [--parent ...] [--metadata JSON]` | moderate one comment, print the decision JSON |
 | `moderate-file PATH [--text-col] [--out] [--mode] [--no-save] [--yes]` | moderate a JSONL/CSV file; escalations fill the review queue unless `--no-save` |
 | `eval [--data] [--modes] [--limit] [--budget] [--batch] [--yes]` | ablation eval with a markdown/JSON report; `--batch` uses the Batch API (50% off) |
@@ -192,7 +196,7 @@ src/modtriage/
   api/app.py     FastAPI (moderate, batch, queue search, review, agreement, CSV/JSONL export, usage, eval)
                  + serves the built UI
 frontend/        React + TS: Triage playground, Batch, Review queue (+ agreement), Evaluation dashboard, Policy
-tests/           57 offline tests (policy, voting, pipeline, eval, data, gate, feedback, cost, CLI, API)
+tests/           62 offline tests (policy, voting, pipeline, eval, data, gate, feedback, cost, CLI, API)
 ```
 
 ## 2–3 week plan
